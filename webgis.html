@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WebGIS Sederhana</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+  :root {
+    --ink: #1d2b2a; --muted: #5f6f6d; --paper: #ffffff; --line: #d6dedc; --accent: #0f766e;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--ink); }
+  #map { position: absolute; inset: 0; cursor: crosshair; }
+
+  .card {
+    position: absolute; z-index: 1000; background: var(--paper); border: 1px solid var(--line);
+    border-radius: var(--radius); box-shadow: 0 6px 24px rgba(0,0,0,.18);
+  }
+  #form-card { top: 16px; right: 16px; width: 300px; padding: 16px; display: none; }
+  #form-card.open { display: block; }
+  #form-card h2 { margin: 0 0 4px; font-size: 16px; }
+  #form-card .coord { margin: 0 0 12px; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  label { display: block; margin-bottom: 10px; font-size: 13px; font-weight: 600; }
+  input, select, textarea {
+    width: 100%; margin-top: 4px; padding: 8px 10px; font: inherit; font-weight: 400;
+    border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--ink);
+  }
+  textarea { resize: vertical; min-height: 64px; }
+  input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .actions { display: flex; gap: 8px; margin-top: 4px; }
+  button { font: inherit; padding: 8px 14px; border-radius: 6px; cursor: pointer; border: 1px solid var(--line); background: #fff; color: var(--ink); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; flex: 1; }
+
+  #list-card { left: 16px; bottom: 24px; width: 260px; max-height: 40vh; overflow: auto; padding: 12px 14px; }
+  #list-card h3 { margin: 0 0 6px; font-size: 14px; }
+  #list-card p.empty { margin: 0; font-size: 13px; color: var(--muted); }
+  #list-card ul { list-style: none; margin: 0; padding: 0; }
+  #list-card li { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid var(--line); font-size: 13px; }
+  #list-card li:first-child { border-top: 0; }
+  #list-card li button.go { flex: 1; text-align: left; border: 0; padding: 0; background: none; cursor: pointer; }
+  #list-card li button.del { border: 0; padding: 0 4px; color: var(--muted); font-size: 16px; background: none; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+
+  .pin { width: 22px; height: 22px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); border: 2px solid #fff; box-shadow: 0 2px 6px rgba(0,0,0,.35); }
+  .pin::after { content: ""; position: absolute; width: 8px; height: 8px; background: #fff; border-radius: 50%; top: 5px; left: 5px; }
+  .popup-title { font-weight: 700; margin-bottom: 2px; }
+  .popup-meta { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+
+  @media (max-width: 600px) {
+    #form-card { left: 12px; right: 12px; top: auto; bottom: 12px; width: auto; }
+    #list-card { display: none; }
+  }
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<!-- Card form: muncul saat peta diklik -->
+<div id="form-card" class="card" role="dialog" aria-label="Tambah lokasi">
+  <h2>Tambah lokasi</h2>
+  <p class="coord" id="coord"></p>
+  <div>
+    <label>Nama lokasi
+      <input id="f-nama" type="text" placeholder="Contoh: Warung Bu Sari" maxlength="60">
+    </label>
+    <label>Kategori
+      <select id="f-kategori">
+        <option value="Makanan">Makanan</option>
+        <option value="Wisata">Wisata</option>
+        <option value="Fasilitas umum">Fasilitas umum</option>
+        <option value="Lainnya">Lainnya</option>
+      </select>
+    </label>
+    <label>Catatan
+      <textarea id="f-catatan" placeholder="Opsional"></textarea>
+    </label>
+    <div class="actions">
+      <button class="primary" id="btn-simpan" type="button">Simpan lokasi</button>
+      <button id="btn-batal" type="button">Batal</button>
+    </div>
+  </div>
+</div>
+
+<!-- Daftar lokasi tersimpan -->
+<div id="list-card" class="card">
+  <h3>Lokasi tersimpan</h3>
+  <p class="empty" id="empty">Klik peta untuk menambah lokasi pertama.</p>
+  <ul id="list"></ul>
+</div>
+
+<script>
+  const WARNA = { "Makanan": "#d9480f", "Wisata": "#0f766e", "Fasilitas umum": "#1c64d1", "Lainnya": "#7c3aed" };
+  const KEY = "webgis-lokasi";
+
+ 
+  // Peta (pusat awal: UNJ)
+const map = L.map("map").setView([-6.1945, 106.8788], 18);
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: "&copy; OpenStreetMap contributors"
+  }).addTo(map);
+
+  let data = [];          // semua lokasi tersimpan
+  let draft = null;       // titik yang sedang diisi
+  let draftMarker = null; // penanda sementara
+  const markers = {};     // id -> L.marker
+
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  function pinIcon(kategori) {
+    return L.divIcon({
+      className: "",
+      html: `<div class="pin" style="background:${WARNA[kategori] || WARNA["Lainnya"]}"></div>`,
+      iconSize: [22, 22], iconAnchor: [11, 22], popupAnchor: [0, -22]
+    });
+  }
+
+  function simpanStorage() {
+    try { localStorage.setItem(KEY, JSON.stringify(data)); } catch (e) {}
+  }
+
+  function popupHtml(p) {
+    return `<div class="popup-title">${esc(p.nama)}</div>
+            <div class="popup-meta">${esc(p.kategori)} · ${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}</div>
+            ${p.catatan ? `<div>${esc(p.catatan)}</div>` : ""}`;
+  }
+
+  function tambahMarker(p) {
+    const m = L.marker([p.lat, p.lng], { icon: pinIcon(p.kategori) }).addTo(map).bindPopup(popupHtml(p));
+    markers[p.id] = m;
+  }
+
+  function renderList() {
+    const ul = $("list");
+    ul.innerHTML = "";
+    $("empty").style.display = data.length ? "none" : "block";
+    data.forEach((p) => {
+      const li = document.createElement("li");
+      li.innerHTML = `<span class="dot" style="background:${WARNA[p.kategori] || WARNA["Lainnya"]}"></span>
+        <button class="go" type="button">${esc(p.nama)}</button>
+        <button class="del" type="button" aria-label="Hapus ${esc(p.nama)}">×</button>`;
+      li.querySelector(".go").onclick = () => { map.flyTo([p.lat, p.lng], Math.max(map.getZoom(), 15)); markers[p.id].openPopup(); };
+      li.querySelector(".del").onclick = () => hapus(p.id);
+      ul.appendChild(li);
+    });
+  }
+
+  function hapus(id) {
+    map.removeLayer(markers[id]);
+    delete markers[id];
+    data = data.filter((p) => p.id !== id);
+    simpanStorage();
+    renderList();
+  }
+
+  function bukaForm(latlng) {
+    draft = latlng;
+    if (draftMarker) map.removeLayer(draftMarker);
+    draftMarker = L.circleMarker(latlng, { radius: 8, color: "#0f766e", weight: 3, fillColor: "#fff", fillOpacity: 1 }).addTo(map);
+    $("coord").textContent = `Lat ${latlng.lat.toFixed(5)}, Lng ${latlng.lng.toFixed(5)}`;
+    $("f-nama").value = ""; $("f-catatan").value = "";
+    $("form-card").classList.add("open");
+    $("f-nama").focus();
+  }
+
+  function tutupForm() {
+    $("form-card").classList.remove("open");
+    if (draftMarker) { map.removeLayer(draftMarker); draftMarker = null; }
+    draft = null;
+  }
+
+  // Klik peta -> card muncul
+  map.on("click", (e) => bukaForm(e.latlng));
+
+  // Submit -> marker muncul
+  $("btn-simpan").onclick = () => {
+    const nama = $("f-nama").value.trim();
+    if (!nama) { $("f-nama").focus(); $("f-nama").style.borderColor = "#c0392b"; return; }
+    $("f-nama").style.borderColor = "";
+    const p = {
+      id: Date.now().toString(36),
+      nama, kategori: $("f-kategori").value, catatan: $("f-catatan").value.trim(),
+      lat: draft.lat, lng: draft.lng
+    };
+    data.push(p);
+    tambahMarker(p);
+    markers[p.id].openPopup();
+    simpanStorage();
+    renderList();
+    tutupForm();
+  };
+  $("btn-batal").onclick = tutupForm;
+  $("f-nama").addEventListener("keydown", (e) => { if (e.key === "Enter") $("btn-simpan").click(); });
+
+  // Muat data tersimpan
+  try { data = JSON.parse(localStorage.getItem(KEY) || "[]"); } catch (e) { data = []; }
+  data.forEach(tambahMarker);
+  renderList();
+</script>
+</body>
+</html>
